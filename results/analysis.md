@@ -14,20 +14,20 @@
 
 ### Fastest database by query
 
-- **point_lookup**: FalkorDB (0.357 ms median)\n- **knows_lookup**: FalkorDB (0.426 ms median)\n- **person_company_city**: FalkorDB (0.493 ms median)\n- **two_hop_traversal**: FalkorDB (0.569 ms median)\n- **company_aggregation**: FalkorDB (1.801 ms median)\n- **short_path**: FalkorDB (0.941 ms median)\n
+- **point_lookup**: FalkorDB (0.377 ms median)\n- **knows_lookup**: FalkorDB (0.442 ms median)\n- **person_company_city**: FalkorDB (0.502 ms median)\n- **two_hop_traversal**: Memgraph (0.565 ms median)\n- **company_aggregation**: FalkorDB (2.181 ms median)\n- **short_path**: FalkorDB (0.889 ms median)\n
 ### Number of fastest results
 
 - Neo4j: 0
-- Memgraph: 0
-- FalkorDB: 6
+- Memgraph: 1
+- FalkorDB: 5
 
 ## 3. Average Median Latency
 
 | Database | Average of Query Medians |
 |---|---:|
-| Neo4j | 1.410 ms |
-| Memgraph | 0.953 ms |
-| FalkorDB | 0.765 ms |
+| Neo4j | 1.334 ms |
+| Memgraph | 0.935 ms |
+| FalkorDB | 0.827 ms |
 
 ## 4. Query-Level Findings
 
