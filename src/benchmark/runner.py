@@ -1,13 +1,18 @@
 import csv
 import math
+import os
 import statistics
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
 from falkordb import FalkorDB
 from neo4j import GraphDatabase
 
 from queries import QUERIES, DEFAULT_PARAMS
+
+
+load_dotenv()
 
 
 # ============================================================
@@ -23,9 +28,6 @@ COMPARISON_FILE = RESULTS_DIR / "benchmark_comparison.csv"
 WARMUP_RUNS = 5
 MEASURED_RUNS = 100
 
-# Outlier threshold:
-# A run is considered a high-latency outlier if it is above
-# median + 3 * standard deviation.
 OUTLIER_STD_MULTIPLIER = 3
 
 
@@ -34,10 +36,7 @@ OUTLIER_STD_MULTIPLIER = 3
 # ============================================================
 
 def percentile(values, percentile_value):
-    """
-    Calculate percentile using linear interpolation.
-    percentile_value should be between 0 and 1.
-    """
+    """Calculate percentile using linear interpolation."""
 
     values = sorted(values)
 
@@ -61,19 +60,32 @@ def percentile(values, percentile_value):
 
 
 def calculate_statistics(timings):
-    """
-    Calculate complete latency statistics.
-    """
+    """Calculate latency statistics."""
+
+    if not timings:
+        return {
+            "runs": 0,
+            "min_ms": 0.0,
+            "avg_ms": 0.0,
+            "median_ms": 0.0,
+            "p90_ms": 0.0,
+            "p95_ms": 0.0,
+            "p99_ms": 0.0,
+            "max_ms": 0.0,
+            "stdev_ms": 0.0,
+            "cv_percent": 0.0,
+            "outlier_count": 0,
+        }
 
     mean = statistics.mean(timings)
     median = statistics.median(timings)
 
-    if len(timings) > 1:
-        stdev = statistics.stdev(timings)
-    else:
-        stdev = 0.0
+    stdev = (
+        statistics.stdev(timings)
+        if len(timings) > 1
+        else 0.0
+    )
 
-    # Detect unusually slow executions.
     threshold = (
         median
         + OUTLIER_STD_MULTIPLIER * stdev
@@ -97,7 +109,7 @@ def calculate_statistics(timings):
         "stdev_ms": stdev,
         "cv_percent": (
             (stdev / mean) * 100
-            if mean != 0
+            if mean
             else 0.0
         ),
         "outlier_count": len(outliers),
@@ -114,41 +126,34 @@ def measure_query(
     database,
 ):
     """
-    Warm up the database and then measure query latency.
+    Warm up the database and measure query latency.
+
+    Five warm-up executions are discarded.
+    One hundred executions are measured.
     """
 
-    # --------------------------------------------------------
-    # Warm-up
-    # --------------------------------------------------------
+    print(
+        f"    {database} -> {query_name}"
+    )
 
+    # Warm-up
     for _ in range(WARMUP_RUNS):
         execute_query()
 
     timings = []
 
-    # --------------------------------------------------------
-    # Measured runs
-    # --------------------------------------------------------
-
-    for run_number in range(
-        1,
-        MEASURED_RUNS + 1,
-    ):
+    # Measured executions
+    for _ in range(MEASURED_RUNS):
 
         start = time.perf_counter()
 
         execute_query()
 
         elapsed_ms = (
-            time.perf_counter()
-            - start
+            time.perf_counter() - start
         ) * 1000
 
         timings.append(elapsed_ms)
-
-    # --------------------------------------------------------
-    # Statistics
-    # --------------------------------------------------------
 
     stats = calculate_statistics(timings)
 
@@ -158,17 +163,12 @@ def measure_query(
         **stats,
     }
 
-    # --------------------------------------------------------
-    # Raw results
-    # --------------------------------------------------------
-
     raw_results = []
 
     for run_number, timing in enumerate(
         timings,
         start=1,
     ):
-
         raw_results.append({
             "database": database,
             "query": query_name,
@@ -206,13 +206,9 @@ def benchmark_neo4j():
 
             for query_name, query in QUERIES.items():
 
-                print(
-                    f"  Neo4j -> {query_name}"
-                )
-
                 summary, raw = measure_query(
-                    lambda: session.run(
-                        query,
+                    lambda q=query: session.run(
+                        q,
                         **DEFAULT_PARAMS,
                     ).consume(),
                     query_name,
@@ -223,7 +219,6 @@ def benchmark_neo4j():
                 raw_results.extend(raw)
 
     finally:
-
         driver.close()
 
     return summaries, raw_results
@@ -250,13 +245,9 @@ def benchmark_memgraph():
 
             for query_name, query in QUERIES.items():
 
-                print(
-                    f"  Memgraph -> {query_name}"
-                )
-
                 summary, raw = measure_query(
-                    lambda: session.run(
-                        query,
+                    lambda q=query: session.run(
+                        q,
                         **DEFAULT_PARAMS,
                     ).consume(),
                     query_name,
@@ -267,7 +258,6 @@ def benchmark_memgraph():
                 raw_results.extend(raw)
 
     finally:
-
         driver.close()
 
     return summaries, raw_results
@@ -284,22 +274,16 @@ def benchmark_falkordb():
         port=6379,
     )
 
-    graph = db.select_graph(
-        "benchmark"
-    )
+    graph = db.select_graph("benchmark")
 
     summaries = []
     raw_results = []
 
     for query_name, query in QUERIES.items():
 
-        print(
-            f"  FalkorDB -> {query_name}"
-        )
-
         summary, raw = measure_query(
-            lambda: graph.query(
-                query,
+            lambda q=query: graph.query(
+                q,
                 params=DEFAULT_PARAMS,
             ),
             query_name,
@@ -308,6 +292,68 @@ def benchmark_falkordb():
 
         summaries.append(summary)
         raw_results.extend(raw)
+
+    return summaries, raw_results
+
+
+# ============================================================
+# COGNODB
+# ============================================================
+
+def benchmark_cognodb():
+
+    uri = os.getenv("COGNODB_URI")
+    username = os.getenv(
+        "COGNODB_USERNAME",
+        "cognodb",
+    )
+    password = os.getenv(
+        "COGNODB_PASSWORD"
+    )
+
+    if not uri:
+        raise RuntimeError(
+            "COGNODB_URI is not set in .env"
+        )
+
+    if not password:
+        raise RuntimeError(
+            "COGNODB_PASSWORD is not set in .env"
+        )
+
+    driver = GraphDatabase.driver(
+        uri,
+        auth=(
+            username,
+            password,
+        ),
+    )
+
+    driver.verify_connectivity()
+
+    summaries = []
+    raw_results = []
+
+    try:
+
+        with driver.session() as session:
+
+            for query_name, query in QUERIES.items():
+
+                summary, raw = measure_query(
+                    lambda q=query: session.run(
+                        q,
+                        **DEFAULT_PARAMS,
+                    ).consume(),
+                    query_name,
+                    "CognoDB",
+                )
+
+                summaries.append(summary)
+                raw_results.extend(raw)
+
+    finally:
+        driver.close()
 
     return summaries, raw_results
 
@@ -412,14 +458,6 @@ def save_comparison(results):
 
     for query, databases in grouped.items():
 
-        neo4j = databases.get("Neo4j")
-        memgraph = databases.get("Memgraph")
-        falkordb = databases.get("FalkorDB")
-
-        # ----------------------------------------------------
-        # Find fastest database using median latency
-        # ----------------------------------------------------
-
         available = {
             database: result["median_ms"]
             for database, result in databases.items()
@@ -430,63 +468,95 @@ def save_comparison(results):
             key=available.get,
         )
 
-        fastest_median = available[
-            fastest_database
-        ]
-
         row = {
             "query": query,
             "fastest_database": fastest_database,
-            "fastest_median_ms": fastest_median,
+            "fastest_median_ms": available[
+                fastest_database
+            ],
         }
 
         # ----------------------------------------------------
-        # Median latency
+        # Every database
         # ----------------------------------------------------
 
-        for database, result in databases.items():
+        for database in [
+            "Neo4j",
+            "Memgraph",
+            "FalkorDB",
+            "CognoDB",
+        ]:
+
+            result = databases.get(database)
 
             prefix = database.lower()
 
-            row[
-                f"{prefix}_median_ms"
-            ] = result["median_ms"]
+            if result:
 
-            row[
-                f"{prefix}_p95_ms"
-            ] = result["p95_ms"]
+                row[
+                    f"{prefix}_median_ms"
+                ] = result["median_ms"]
 
-            row[
-                f"{prefix}_p99_ms"
-            ] = result["p99_ms"]
+                row[
+                    f"{prefix}_p95_ms"
+                ] = result["p95_ms"]
+
+                row[
+                    f"{prefix}_p99_ms"
+                ] = result["p99_ms"]
+
+            else:
+
+                row[
+                    f"{prefix}_median_ms"
+                ] = ""
+
+                row[
+                    f"{prefix}_p95_ms"
+                ] = ""
+
+                row[
+                    f"{prefix}_p99_ms"
+                ] = ""
 
         # ----------------------------------------------------
         # Speedup against Neo4j
         # ----------------------------------------------------
 
+        neo4j = databases.get("Neo4j")
+
         if neo4j:
 
-            neo4j_median = (
-                neo4j["median_ms"]
-            )
+            neo4j_median = neo4j[
+                "median_ms"
+            ]
 
-            if memgraph:
+            for database in [
+                "Memgraph",
+                "FalkorDB",
+                "CognoDB",
+            ]:
 
-                row[
-                    "memgraph_speedup_vs_neo4j"
-                ] = (
-                    neo4j_median
-                    / memgraph["median_ms"]
+                result = databases.get(
+                    database
                 )
 
-            if falkordb:
+                prefix = database.lower()
 
-                row[
-                    "falkordb_speedup_vs_neo4j"
-                ] = (
-                    neo4j_median
-                    / falkordb["median_ms"]
-                )
+                if result and result["median_ms"] > 0:
+
+                    row[
+                        f"{prefix}_speedup_vs_neo4j"
+                    ] = (
+                        neo4j_median
+                        / result["median_ms"]
+                    )
+
+                else:
+
+                    row[
+                        f"{prefix}_speedup_vs_neo4j"
+                    ] = ""
 
         rows.append(row)
 
@@ -507,8 +577,13 @@ def save_comparison(results):
         "falkordb_p95_ms",
         "falkordb_p99_ms",
 
+        "cognodb_median_ms",
+        "cognodb_p95_ms",
+        "cognodb_p99_ms",
+
         "memgraph_speedup_vs_neo4j",
         "falkordb_speedup_vs_neo4j",
+        "cognodb_speedup_vs_neo4j",
     ]
 
     with open(
@@ -520,7 +595,6 @@ def save_comparison(results):
         writer = csv.DictWriter(
             file,
             fieldnames=fieldnames,
-            extrasaction="ignore",
         )
 
         writer.writeheader()
@@ -534,35 +608,22 @@ def save_comparison(results):
 def print_results(results):
 
     print()
-    print(
-        "=" * 125
-    )
-    print(
-        "BENCHMARK RESULTS"
-    )
-    print(
-        "=" * 125
-    )
+    print("=" * 125)
+    print("BENCHMARK RESULTS")
+    print("=" * 125)
 
     for result in results:
 
         print(
             f"{result['database']:10} | "
             f"{result['query']:22} | "
-            f"median="
-            f"{result['median_ms']:.3f} ms | "
-            f"p95="
-            f"{result['p95_ms']:.3f} ms | "
-            f"p99="
-            f"{result['p99_ms']:.3f} ms | "
-            f"avg="
-            f"{result['avg_ms']:.3f} ms | "
-            f"max="
-            f"{result['max_ms']:.3f} ms | "
-            f"CV="
-            f"{result['cv_percent']:.2f}% | "
-            f"outliers="
-            f"{result['outlier_count']}"
+            f"median={result['median_ms']:.3f} ms | "
+            f"p95={result['p95_ms']:.3f} ms | "
+            f"p99={result['p99_ms']:.3f} ms | "
+            f"avg={result['avg_ms']:.3f} ms | "
+            f"max={result['max_ms']:.3f} ms | "
+            f"CV={result['cv_percent']:.2f}% | "
+            f"outliers={result['outlier_count']}"
         )
 
 
@@ -584,15 +645,9 @@ def print_winners(results):
         grouped[query].append(result)
 
     print()
-    print(
-        "=" * 80
-    )
-    print(
-        "FASTEST DATABASE BY MEDIAN LATENCY"
-    )
-    print(
-        "=" * 80
-    )
+    print("=" * 80)
+    print("FASTEST DATABASE BY MEDIAN LATENCY")
+    print("=" * 80)
 
     for query, database_results in grouped.items():
 
@@ -615,18 +670,16 @@ def print_winners(results):
 
 def main():
 
+    print("=" * 80)
+    print("GRAPH DATABASE CLOUD BENCHMARK")
+    print("=" * 80)
+
     print(
-        "Starting benchmark..."
+        f"Warm-up runs: {WARMUP_RUNS}"
     )
 
     print(
-        f"\nWarm-up runs: "
-        f"{WARMUP_RUNS}"
-    )
-
-    print(
-        f"Measured runs: "
-        f"{MEASURED_RUNS}"
+        f"Measured runs: {MEASURED_RUNS}"
     )
 
     print()
@@ -638,60 +691,51 @@ def main():
     # Neo4j
     # --------------------------------------------------------
 
-    print(
-        "Benchmarking Neo4j..."
-    )
+    print("Benchmarking Neo4j...")
 
     summaries, raw = benchmark_neo4j()
 
-    all_summaries.extend(
-        summaries
-    )
-
-    all_raw_results.extend(
-        raw
-    )
+    all_summaries.extend(summaries)
+    all_raw_results.extend(raw)
 
     # --------------------------------------------------------
     # Memgraph
     # --------------------------------------------------------
 
     print()
-    print(
-        "Benchmarking Memgraph..."
-    )
+    print("Benchmarking Memgraph...")
 
     summaries, raw = benchmark_memgraph()
 
-    all_summaries.extend(
-        summaries
-    )
-
-    all_raw_results.extend(
-        raw
-    )
+    all_summaries.extend(summaries)
+    all_raw_results.extend(raw)
 
     # --------------------------------------------------------
     # FalkorDB
     # --------------------------------------------------------
 
     print()
-    print(
-        "Benchmarking FalkorDB..."
-    )
+    print("Benchmarking FalkorDB...")
 
     summaries, raw = benchmark_falkordb()
 
-    all_summaries.extend(
-        summaries
-    )
-
-    all_raw_results.extend(
-        raw
-    )
+    all_summaries.extend(summaries)
+    all_raw_results.extend(raw)
 
     # --------------------------------------------------------
-    # Save files
+    # CognoDB
+    # --------------------------------------------------------
+
+    print()
+    print("Benchmarking CognoDB...")
+
+    summaries, raw = benchmark_cognodb()
+
+    all_summaries.extend(summaries)
+    all_raw_results.extend(raw)
+
+    # --------------------------------------------------------
+    # Save results
     # --------------------------------------------------------
 
     save_summary(
@@ -707,30 +751,22 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Print output
+    # Print results
     # --------------------------------------------------------
 
     print()
+    print("Benchmark completed.")
 
     print(
-        "Benchmark completed."
-    )
-
-    print()
-
-    print(
-        f"Summary: "
-        f"{SUMMARY_FILE}"
+        f"Summary: {SUMMARY_FILE}"
     )
 
     print(
-        f"Raw timings: "
-        f"{RAW_FILE}"
+        f"Raw timings: {RAW_FILE}"
     )
 
     print(
-        f"Comparison: "
-        f"{COMPARISON_FILE}"
+        f"Comparison: {COMPARISON_FILE}"
     )
 
     print_results(
