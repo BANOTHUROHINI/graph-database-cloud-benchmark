@@ -1,5 +1,6 @@
 import csv
 from pathlib import Path
+
 import matplotlib.pyplot as plt
 
 
@@ -11,30 +12,44 @@ COMPARISON_FILE = RESULTS_DIR / "benchmark_comparison.csv"
 ANALYSIS_FILE = RESULTS_DIR / "analysis.md"
 
 
+DATABASES = ["Neo4j", "Memgraph", "FalkorDB"]
+
+
 def load_csv(path):
     with open(path, newline="") as file:
         return list(csv.DictReader(file))
 
 
+def get_row(results, database, query):
+    for row in results:
+        if row["database"] == database and row["query"] == query:
+            return row
+
+    raise ValueError(
+        f"Missing result for database={database}, query={query}"
+    )
+
+
+def average(values):
+    if not values:
+        return 0.0
+
+    return sum(values) / len(values)
+
+
 def create_median_chart(results):
     queries = sorted(set(row["query"] for row in results))
-    databases = ["Neo4j", "Memgraph", "FalkorDB"]
 
-    x = range(len(queries))
+    x = list(range(len(queries)))
     width = 0.25
 
     plt.figure(figsize=(12, 6))
 
-    for index, database in enumerate(databases):
+    for index, database in enumerate(DATABASES):
         values = []
 
         for query in queries:
-            row = next(
-                r for r in results
-                if r["database"] == database
-                and r["query"] == query
-            )
-
+            row = get_row(results, database, query)
             values.append(float(row["median_ms"]))
 
         positions = [
@@ -50,7 +65,7 @@ def create_median_chart(results):
         )
 
     plt.xticks(
-        list(x),
+        x,
         queries,
         rotation=30,
         ha="right",
@@ -59,6 +74,7 @@ def create_median_chart(results):
     plt.ylabel("Median Latency (ms)")
     plt.title("Median Query Latency Comparison")
     plt.legend()
+
     plt.tight_layout()
 
     plt.savefig(
@@ -71,23 +87,17 @@ def create_median_chart(results):
 
 def create_p95_chart(results):
     queries = sorted(set(row["query"] for row in results))
-    databases = ["Neo4j", "Memgraph", "FalkorDB"]
 
-    x = range(len(queries))
+    x = list(range(len(queries)))
     width = 0.25
 
     plt.figure(figsize=(12, 6))
 
-    for index, database in enumerate(databases):
+    for index, database in enumerate(DATABASES):
         values = []
 
         for query in queries:
-            row = next(
-                r for r in results
-                if r["database"] == database
-                and r["query"] == query
-            )
-
+            row = get_row(results, database, query)
             values.append(float(row["p95_ms"]))
 
         positions = [
@@ -103,7 +113,7 @@ def create_p95_chart(results):
         )
 
     plt.xticks(
-        list(x),
+        x,
         queries,
         rotation=30,
         ha="right",
@@ -112,6 +122,7 @@ def create_p95_chart(results):
     plt.ylabel("P95 Latency (ms)")
     plt.title("P95 Query Latency Comparison")
     plt.legend()
+
     plt.tight_layout()
 
     plt.savefig(
@@ -122,31 +133,76 @@ def create_p95_chart(results):
     plt.close()
 
 
-def create_stability_chart(results):
-    databases = ["Neo4j", "Memgraph", "FalkorDB"]
+def create_p99_chart(results):
+    queries = sorted(set(row["query"] for row in results))
 
+    x = list(range(len(queries)))
+    width = 0.25
+
+    plt.figure(figsize=(12, 6))
+
+    for index, database in enumerate(DATABASES):
+        values = []
+
+        for query in queries:
+            row = get_row(results, database, query)
+            values.append(float(row["p99_ms"]))
+
+        positions = [
+            value + (index - 1) * width
+            for value in x
+        ]
+
+        plt.bar(
+            positions,
+            values,
+            width=width,
+            label=database,
+        )
+
+    plt.xticks(
+        x,
+        queries,
+        rotation=30,
+        ha="right",
+    )
+
+    plt.ylabel("P99 Latency (ms)")
+    plt.title("P99 Query Latency Comparison")
+    plt.legend()
+
+    plt.tight_layout()
+
+    plt.savefig(
+        CHARTS_DIR / "p99_latency.png",
+        dpi=200,
+    )
+
+    plt.close()
+
+
+def create_stability_chart(results):
     cv_values = []
 
-    for database in databases:
+    for database in DATABASES:
         values = [
             float(row["cv_percent"])
             for row in results
             if row["database"] == database
         ]
 
-        cv_values.append(
-            sum(values) / len(values)
-        )
+        cv_values.append(average(values))
 
     plt.figure(figsize=(8, 5))
 
     plt.bar(
-        databases,
+        DATABASES,
         cv_values,
     )
 
     plt.ylabel("Average CV (%)")
     plt.title("Latency Variability by Database")
+
     plt.tight_layout()
 
     plt.savefig(
@@ -157,185 +213,324 @@ def create_stability_chart(results):
     plt.close()
 
 
-def create_analysis(results, comparison):
-    fastest_counts = {}
+def calculate_fastest_counts(comparison):
+    counts = {
+        database: 0
+        for database in DATABASES
+    }
 
     for row in comparison:
         database = row["fastest_database"]
 
-        fastest_counts[database] = (
-            fastest_counts.get(database, 0) + 1
-        )
+        if database not in counts:
+            counts[database] = 0
 
-    neo4j_medians = [
-        float(row["median_ms"])
-        for row in results
-        if row["database"] == "Neo4j"
-    ]
+        counts[database] += 1
 
-    memgraph_medians = [
-        float(row["median_ms"])
-        for row in results
-        if row["database"] == "Memgraph"
-    ]
+    return counts
 
-    falkordb_medians = [
-        float(row["median_ms"])
-        for row in results
-        if row["database"] == "FalkorDB"
-    ]
 
-    def average(values):
-        return sum(values) / len(values)
+def calculate_average_medians(results):
+    averages = {}
 
-    analysis = f"""# Graph Database Benchmark Analysis
+    for database in DATABASES:
+        values = [
+            float(row["median_ms"])
+            for row in results
+            if row["database"] == database
+        ]
 
-## 1. Benchmark Configuration
+        averages[database] = average(values)
 
-- Databases: Neo4j, Memgraph, FalkorDB
-- Queries: 6
-- Warm-up runs: 5
-- Measured runs per query: 100
-- Total measured executions: 1,800
-- Primary metric: median latency
-- Additional metrics: P95, P99, average, maximum latency and coefficient of variation
+    return averages
 
-## 2. Overall Results
 
-### Fastest database by query
-
-"""
+def create_query_findings(comparison):
+    lines = []
 
     for row in comparison:
-        analysis += (
-            f"- **{row['query']}**: "
-            f"{row['fastest_database']} "
-            f"({float(row['fastest_median_ms']):.3f} ms median)\\n"
+        query = row["query"]
+        fastest = row["fastest_database"]
+        fastest_median = float(row["fastest_median_ms"])
+
+        lines.append(
+            f"### {query.replace('_', ' ').title()}\n\n"
+            f"**{fastest}** was fastest with a median latency "
+            f"of **{fastest_median:.3f} ms**.\n"
         )
 
-    analysis += f"""
-### Number of fastest results
+        for database in DATABASES:
+            median_key = f"{database.lower()}_median_ms"
 
-- Neo4j: {fastest_counts.get("Neo4j", 0)}
-- Memgraph: {fastest_counts.get("Memgraph", 0)}
-- FalkorDB: {fastest_counts.get("FalkorDB", 0)}
+            if median_key in row:
+                median = float(row[median_key])
 
-## 3. Average Median Latency
+                lines.append(
+                    f"- {database}: {median:.3f} ms median\n"
+                )
 
-| Database | Average of Query Medians |
-|---|---:|
-| Neo4j | {average(neo4j_medians):.3f} ms |
-| Memgraph | {average(memgraph_medians):.3f} ms |
-| FalkorDB | {average(falkordb_medians):.3f} ms |
+        lines.append("")
 
-## 4. Query-Level Findings
+    return "\n".join(lines)
 
-### Point Lookup
 
-FalkorDB recorded the lowest median latency at approximately
-0.415 ms, followed closely by Memgraph at approximately
-0.455 ms. Neo4j recorded approximately 1.076 ms.
+def create_tail_analysis(results):
+    lines = [
+        "## 5. Latency Stability",
+        "",
+        "Tail latency is evaluated using P95 and P99 rather than "
+        "median latency alone.",
+        "",
+    ]
 
-### Knows Lookup
+    for database in DATABASES:
+        rows = [
+            row
+            for row in results
+            if row["database"] == database
+        ]
 
-Memgraph was fastest with a median of approximately
-0.531 ms. FalkorDB followed at approximately 0.571 ms,
-while Neo4j recorded approximately 1.145 ms.
+        p99_values = [
+            (row["query"], float(row["p99_ms"]))
+            for row in rows
+        ]
 
-### Person-Company-City Traversal
+        highest_query, highest_p99 = max(
+            p99_values,
+            key=lambda item: item[1],
+        )
 
-Memgraph achieved the lowest median latency at approximately
-0.453 ms. FalkorDB recorded approximately 0.592 ms,
-while Neo4j recorded approximately 1.097 ms.
+        cv_values = [
+            float(row["cv_percent"])
+            for row in rows
+        ]
 
-### Two-Hop Traversal
+        avg_cv = average(cv_values)
 
-Memgraph was fastest with approximately 0.522 ms median latency.
-FalkorDB was approximately 0.601 ms and Neo4j approximately
-1.095 ms.
+        lines.append(
+            f"### {database}\n\n"
+            f"- Average CV: **{avg_cv:.2f}%**\n"
+            f"- Highest P99: **{highest_p99:.3f} ms** "
+            f"for `{highest_query}`\n"
+        )
 
-### Company Aggregation
+    lines.append(
+        "The database with the lowest average CV has the most "
+        "stable latency across the tested queries. A high P99 "
+        "relative to the median indicates occasional latency spikes."
+    )
 
-FalkorDB recorded the lowest median latency at approximately
-1.938 ms, narrowly beating Memgraph at approximately
-1.961 ms. Neo4j recorded approximately 3.163 ms.
+    return "\n".join(lines)
 
-### Shortest Path
 
-FalkorDB was fastest with approximately 0.935 ms median latency.
-Memgraph recorded approximately 1.029 ms and Neo4j approximately
-1.737 ms.
+def create_analysis(results, comparison):
+    fastest_counts = calculate_fastest_counts(comparison)
+    average_medians = calculate_average_medians(results)
 
-## 5. Latency Stability
+    total_queries = len(comparison)
+    measured_runs = (
+        int(results[0]["runs"])
+        if results
+        else 0
+    )
 
-The results show a major difference in tail behavior.
+    database_count = len(DATABASES)
 
-Neo4j has very large P99 values for several queries. For example:
+    total_measured_executions = (
+        total_queries
+        * measured_runs
+        * database_count
+    )
 
-- Point lookup P99: approximately 70.933 ms
-- Two-hop traversal P99: approximately 74.655 ms
-- Shortest path P99: approximately 68.442 ms
+    analysis = []
 
-Memgraph also shows occasional large outliers.
+    analysis.append("# Graph Database Benchmark Analysis\n")
 
-FalkorDB is substantially more stable for most queries, although
-the shortest-path workload contains one large outlier.
+    analysis.append(
+        "## 1. Benchmark Configuration\n\n"
+    )
 
-## 6. Important Observation
+    analysis.append(
+        f"- Databases: {', '.join(DATABASES)}\n"
+        f"- Queries: {total_queries}\n"
+        f"- Measured runs per query/database: {measured_runs}\n"
+        f"- Total measured executions: "
+        f"{total_measured_executions}\n"
+        "- Primary metric: median latency\n"
+        "- Additional metrics: P90, P95, P99, average, "
+        "maximum latency, standard deviation and coefficient "
+        "of variation\n"
+    )
 
-Median latency alone does not tell the entire story.
+    analysis.append(
+        "## 2. Overall Results\n\n"
+        "### Fastest Database by Query\n"
+    )
 
-For this benchmark, Neo4j's median latency is reasonably low, but
-its P99 latency is dramatically higher for several workloads.
-This indicates occasional latency spikes.
+    for row in comparison:
+        query = row["query"]
+        database = row["fastest_database"]
+        median = float(row["fastest_median_ms"])
 
-Memgraph provides the best median performance for three of the
-six queries.
+        analysis.append(
+            f"- **{query}**: {database} "
+            f"({median:.3f} ms median)\n"
+        )
 
-FalkorDB provides the best median performance for three of the
-six queries and generally shows lower variability.
+    analysis.append(
+        "\n### Number of Fastest Results\n\n"
+        f"- Neo4j: {fastest_counts.get('Neo4j', 0)}\n"
+        f"- Memgraph: {fastest_counts.get('Memgraph', 0)}\n"
+        f"- FalkorDB: {fastest_counts.get('FalkorDB', 0)}\n"
+    )
 
-## 7. Conclusion
+    analysis.append(
+        "\n## 3. Average Median Latency\n\n"
+        "| Database | Average of Query Medians |\n"
+        "|---|---:|\n"
+        f"| Neo4j | {average_medians['Neo4j']:.3f} ms |\n"
+        f"| Memgraph | {average_medians['Memgraph']:.3f} ms |\n"
+        f"| FalkorDB | {average_medians['FalkorDB']:.3f} ms |\n"
+    )
 
-For the tested workload:
+    analysis.append(
+        "\n## 4. Query-Level Findings\n\n"
+    )
 
-1. **FalkorDB and Memgraph outperform Neo4j on median latency.**
-2. **Memgraph is fastest for traversal-heavy queries such as
-   knows_lookup, person_company_city and two_hop_traversal.**
-3. **FalkorDB is fastest for point lookup, aggregation and
-   shortest-path workloads.**
-4. **Neo4j shows significantly higher tail latency in this local
-   benchmark environment.**
-5. The results should not be interpreted as a universal ranking of
-   graph databases because workload size, hardware, indexes,
-   configuration, query plans and deployment architecture can
-   materially affect performance.
+    analysis.append(
+        create_query_findings(comparison)
+    )
 
-## 8. Generated Charts
+    analysis.append(
+        "\n"
+        + create_tail_analysis(results)
+        + "\n"
+    )
 
-- `charts/median_latency.png`
-- `charts/p95_latency.png`
-- `charts/latency_variability.png`
-"""
+    analysis.append(
+        "\n## 6. Important Observations\n\n"
+    )
+
+    fastest_database = min(
+        average_medians,
+        key=average_medians.get,
+    )
+
+    slowest_database = max(
+        average_medians,
+        key=average_medians.get,
+    )
+
+    analysis.append(
+        f"- **{fastest_database}** has the lowest average "
+        f"median latency across the tested queries "
+        f"({average_medians[fastest_database]:.3f} ms).\n"
+    )
+
+    analysis.append(
+        f"- **{slowest_database}** has the highest average "
+        f"median latency across the tested queries "
+        f"({average_medians[slowest_database]:.3f} ms).\n"
+    )
+
+    analysis.append(
+        "- Median latency represents typical query performance, "
+        "while P95 and P99 expose tail-latency behavior.\n"
+    )
+
+    analysis.append(
+        "- A database can have a good median while still having "
+        "poor tail latency if occasional slow executions occur.\n"
+    )
+
+    analysis.append(
+        "\n## 7. Conclusion\n\n"
+    )
+
+    analysis.append(
+        f"Based on the measured median latency, {fastest_database} "
+        "performed best overall across this benchmark configuration. "
+        "The fastest database was determined independently for each "
+        "query using median latency.\n\n"
+    )
+
+    analysis.append(
+        "The results are specific to this benchmark environment and "
+        "should not be interpreted as a universal ranking of graph "
+        "databases. Hardware limits, container CPU and memory limits, "
+        "dataset size, indexes, query plans, database versions, "
+        "configuration and workload characteristics can materially "
+        "change the results.\n"
+    )
+
+    analysis.append(
+        "\n## 8. Generated Charts\n\n"
+        "- `charts/median_latency.png`\n"
+        "- `charts/p95_latency.png`\n"
+        "- `charts/p99_latency.png`\n"
+        "- `charts/latency_variability.png`\n"
+    )
 
     with open(ANALYSIS_FILE, "w") as file:
-        file.write(analysis)
+        file.write("".join(analysis))
 
 
 def main():
-    CHARTS_DIR.mkdir(parents=True, exist_ok=True)
+    CHARTS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    results = load_csv(RESULTS_FILE)
-    comparison = load_csv(COMPARISON_FILE)
+    results = load_csv(
+        RESULTS_FILE
+    )
 
-    create_median_chart(results)
-    create_p95_chart(results)
-    create_stability_chart(results)
-    create_analysis(results, comparison)
+    comparison = load_csv(
+        COMPARISON_FILE
+    )
 
-    print("Analysis completed.")
-    print(f"Analysis: {ANALYSIS_FILE}")
-    print(f"Charts: {CHARTS_DIR}")
+    if not results:
+        raise RuntimeError(
+            "benchmark_results.csv is empty."
+        )
+
+    if not comparison:
+        raise RuntimeError(
+            "benchmark_comparison.csv is empty."
+        )
+
+    create_median_chart(
+        results
+    )
+
+    create_p95_chart(
+        results
+    )
+
+    create_p99_chart(
+        results
+    )
+
+    create_stability_chart(
+        results
+    )
+
+    create_analysis(
+        results,
+        comparison,
+    )
+
+    print(
+        "Analysis completed."
+    )
+
+    print(
+        f"Analysis: {ANALYSIS_FILE}"
+    )
+
+    print(
+        f"Charts: {CHARTS_DIR}"
+    )
 
 
 if __name__ == "__main__":

@@ -1,21 +1,23 @@
 # Graph Database Benchmark Analysis
-
 ## 1. Benchmark Configuration
 
 - Databases: Neo4j, Memgraph, FalkorDB
 - Queries: 6
-- Warm-up runs: 5
-- Measured runs per query: 100
-- Total measured executions: 1,800
+- Measured runs per query/database: 100
+- Total measured executions: 1800
 - Primary metric: median latency
-- Additional metrics: P95, P99, average, maximum latency and coefficient of variation
-
+- Additional metrics: P90, P95, P99, average, maximum latency, standard deviation and coefficient of variation
 ## 2. Overall Results
 
-### Fastest database by query
+### Fastest Database by Query
+- **point_lookup**: FalkorDB (0.480 ms median)
+- **knows_lookup**: FalkorDB (0.566 ms median)
+- **person_company_city**: Memgraph (0.589 ms median)
+- **two_hop_traversal**: FalkorDB (0.642 ms median)
+- **company_aggregation**: FalkorDB (2.112 ms median)
+- **short_path**: FalkorDB (1.095 ms median)
 
-- **point_lookup**: FalkorDB (0.377 ms median)\n- **knows_lookup**: FalkorDB (0.442 ms median)\n- **person_company_city**: FalkorDB (0.502 ms median)\n- **two_hop_traversal**: Memgraph (0.565 ms median)\n- **company_aggregation**: FalkorDB (2.181 ms median)\n- **short_path**: FalkorDB (0.889 ms median)\n
-### Number of fastest results
+### Number of Fastest Results
 
 - Neo4j: 0
 - Memgraph: 1
@@ -25,95 +27,115 @@
 
 | Database | Average of Query Medians |
 |---|---:|
-| Neo4j | 1.334 ms |
-| Memgraph | 0.935 ms |
-| FalkorDB | 0.827 ms |
+| Neo4j | 2.975 ms |
+| Memgraph | 1.055 ms |
+| FalkorDB | 0.923 ms |
 
 ## 4. Query-Level Findings
 
 ### Point Lookup
 
-FalkorDB recorded the lowest median latency at approximately
-0.415 ms, followed closely by Memgraph at approximately
-0.455 ms. Neo4j recorded approximately 1.076 ms.
+**FalkorDB** was fastest with a median latency of **0.480 ms**.
+
+- Neo4j: 3.293 ms median
+
+- Memgraph: 0.611 ms median
+
+- FalkorDB: 0.480 ms median
+
 
 ### Knows Lookup
 
-Memgraph was fastest with a median of approximately
-0.531 ms. FalkorDB followed at approximately 0.571 ms,
-while Neo4j recorded approximately 1.145 ms.
+**FalkorDB** was fastest with a median latency of **0.566 ms**.
 
-### Person-Company-City Traversal
+- Neo4j: 2.809 ms median
 
-Memgraph achieved the lowest median latency at approximately
-0.453 ms. FalkorDB recorded approximately 0.592 ms,
-while Neo4j recorded approximately 1.097 ms.
+- Memgraph: 0.708 ms median
 
-### Two-Hop Traversal
+- FalkorDB: 0.566 ms median
 
-Memgraph was fastest with approximately 0.522 ms median latency.
-FalkorDB was approximately 0.601 ms and Neo4j approximately
-1.095 ms.
+
+### Person Company City
+
+**Memgraph** was fastest with a median latency of **0.589 ms**.
+
+- Neo4j: 2.345 ms median
+
+- Memgraph: 0.589 ms median
+
+- FalkorDB: 0.644 ms median
+
+
+### Two Hop Traversal
+
+**FalkorDB** was fastest with a median latency of **0.642 ms**.
+
+- Neo4j: 1.901 ms median
+
+- Memgraph: 0.678 ms median
+
+- FalkorDB: 0.642 ms median
+
 
 ### Company Aggregation
 
-FalkorDB recorded the lowest median latency at approximately
-1.938 ms, narrowly beating Memgraph at approximately
-1.961 ms. Neo4j recorded approximately 3.163 ms.
+**FalkorDB** was fastest with a median latency of **2.112 ms**.
 
-### Shortest Path
+- Neo4j: 4.688 ms median
 
-FalkorDB was fastest with approximately 0.935 ms median latency.
-Memgraph recorded approximately 1.029 ms and Neo4j approximately
-1.737 ms.
+- Memgraph: 2.463 ms median
+
+- FalkorDB: 2.112 ms median
+
+
+### Short Path
+
+**FalkorDB** was fastest with a median latency of **1.095 ms**.
+
+- Neo4j: 2.816 ms median
+
+- Memgraph: 1.278 ms median
+
+- FalkorDB: 1.095 ms median
+
 
 ## 5. Latency Stability
 
-The results show a major difference in tail behavior.
+Tail latency is evaluated using P95 and P99 rather than median latency alone.
 
-Neo4j has very large P99 values for several queries. For example:
+### Neo4j
 
-- Point lookup P99: approximately 70.933 ms
-- Two-hop traversal P99: approximately 74.655 ms
-- Shortest path P99: approximately 68.442 ms
+- Average CV: **195.01%**
+- Highest P99: **92.241 ms** for `point_lookup`
 
-Memgraph also shows occasional large outliers.
+### Memgraph
 
-FalkorDB is substantially more stable for most queries, although
-the shortest-path workload contains one large outlier.
+- Average CV: **246.97%**
+- Highest P99: **47.017 ms** for `short_path`
 
-## 6. Important Observation
+### FalkorDB
 
-Median latency alone does not tell the entire story.
+- Average CV: **34.90%**
+- Highest P99: **2.951 ms** for `company_aggregation`
 
-For this benchmark, Neo4j's median latency is reasonably low, but
-its P99 latency is dramatically higher for several workloads.
-This indicates occasional latency spikes.
+The database with the lowest average CV has the most stable latency across the tested queries. A high P99 relative to the median indicates occasional latency spikes.
 
-Memgraph provides the best median performance for three of the
-six queries.
+## 6. Important Observations
 
-FalkorDB provides the best median performance for three of the
-six queries and generally shows lower variability.
+- **FalkorDB** has the lowest average median latency across the tested queries (0.923 ms).
+- **Neo4j** has the highest average median latency across the tested queries (2.975 ms).
+- Median latency represents typical query performance, while P95 and P99 expose tail-latency behavior.
+- A database can have a good median while still having poor tail latency if occasional slow executions occur.
 
 ## 7. Conclusion
 
-For the tested workload:
+Based on the measured median latency, FalkorDB performed best overall across this benchmark configuration. The fastest database was determined independently for each query using median latency.
 
-1. **FalkorDB and Memgraph outperform Neo4j on median latency.**
-2. **Memgraph is fastest for traversal-heavy queries such as
-   knows_lookup, person_company_city and two_hop_traversal.**
-3. **FalkorDB is fastest for point lookup, aggregation and
-   shortest-path workloads.**
-4. **Neo4j shows significantly higher tail latency in this local
-   benchmark environment.**
-5. The results should not be interpreted as a universal ranking of
-   graph databases because workload size, hardware, indexes,
-   configuration, query plans and deployment architecture can
-   materially affect performance.
+The results are specific to this benchmark environment and should not be interpreted as a universal ranking of graph databases. Hardware limits, container CPU and memory limits, dataset size, indexes, query plans, database versions, configuration and workload characteristics can materially change the results.
 
 ## 8. Generated Charts
 
 - `charts/median_latency.png`
 - `charts/p95_latency.png`
+- `charts/p99_latency.png`
 - `charts/latency_variability.png`
